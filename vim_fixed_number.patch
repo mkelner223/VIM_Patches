@@ -1,0 +1,201 @@
+diff -rupN original/src/edit.c new/src/edit.c
+--- original/src/edit.c	2012-11-03 16:02:18.862524774 -0400
++++ new/src/edit.c	2012-11-02 17:23:01.942515353 -0400
+@@ -6600,7 +6600,7 @@ comp_textwidth(ff)
+ 		    )
+ 	    textwidth -= 1;
+ #endif
+-	if (curwin->w_p_nu || curwin->w_p_rnu)
++	if (curwin->w_p_nu || curwin->w_p_rnu || curwin->w_p_fnu)
+ 	    textwidth -= 8;
+     }
+     if (textwidth < 0)
+diff -rupN original/src/ex_cmds.c new/src/ex_cmds.c
+--- original/src/ex_cmds.c	2012-11-03 16:02:18.902525861 -0400
++++ new/src/ex_cmds.c	2012-11-02 17:18:43.802515154 -0400
+@@ -3500,6 +3500,7 @@ do_ecmd(fnum, ffname, sfname, eap, newln
+ 	curbuf->b_p_bin = FALSE;	/* reset 'bin' before reading file */
+ 	curwin->w_p_nu = 0;		/* no line numbers */
+ 	curwin->w_p_rnu = 0;		/* no relative line numbers */
++	curwin->w_p_fnu = 0;		/* no fixed line numbers */
+ 	RESET_BINDING(curwin);		/* no scroll or cursor binding */
+ #ifdef FEAT_ARABIC
+ 	curwin->w_p_arab = FALSE;	/* no arabic mode */
+diff -rupN original/src/move.c new/src/move.c
+--- original/src/move.c	2012-11-03 16:02:19.132521591 -0400
++++ new/src/move.c	2012-11-02 17:28:54.752515097 -0400
+@@ -869,14 +869,15 @@ validate_cursor_col()
+ }
+ 
+ /*
+- * Compute offset of a window, occupied by absolute or relative line number,
+- * fold column and sign column (these don't move when scrolling horizontally).
++ * Compute offset of a window, occupied by absolute or relative or fixed
++ * line number, fold column and sign column (these don't move when scrolling
++ * horizontally).
+  */
+     int
+ win_col_off(wp)
+     win_T	*wp;
+ {
+-    return (((wp->w_p_nu || wp->w_p_rnu) ? number_width(wp) + 1 : 0)
++    return (((wp->w_p_nu || wp->w_p_rnu || wp->w_p_fnu) ? number_width(wp) + 1 : 0)
+ #ifdef FEAT_CMDWIN
+ 	    + (cmdwin_type == 0 || wp != curwin ? 0 : 1)
+ #endif
+@@ -902,14 +903,14 @@ curwin_col_off()
+ 
+ /*
+  * Return the difference in column offset for the second screen line of a
+- * wrapped line.  It's 8 if 'number' or 'relativenumber' is on and 'n' is in
+- * 'cpoptions'.
++ * wrapped line.  It's 8 if 'number' or 'relativenumber' or 'fixednumber' 
++ * is on and 'n' is in 'cpoptions'.
+  */
+     int
+ win_col_off2(wp)
+     win_T	*wp;
+ {
+-    if ((wp->w_p_nu || wp->w_p_rnu) && vim_strchr(p_cpo, CPO_NUMCOL) != NULL)
++    if ((wp->w_p_nu || wp->w_p_rnu || wp->w_p_fnu) && vim_strchr(p_cpo, CPO_NUMCOL) != NULL)
+ 	return number_width(wp) + 1;
+     return 0;
+ }
+diff -rupN original/src/netbeans.c new/src/netbeans.c
+--- original/src/netbeans.c	2012-11-03 16:02:19.142519235 -0400
++++ new/src/netbeans.c	2012-11-02 17:26:13.052515578 -0400
+@@ -3314,7 +3314,7 @@ netbeans_button_release(int button)
+     if (bufno >= 0 && curwin != NULL && curwin->w_buffer == curbuf)
+     {
+ 	int col = mouse_col - W_WINCOL(curwin)
+-			      - ((curwin->w_p_nu || curwin->w_p_rnu) ? 9 : 1);
++			      - ((curwin->w_p_nu || curwin->w_p_rnu || curwin->w_p_fnu) ? 9 : 1);
+ 	long off = pos2off(curbuf, &curwin->w_cursor);
+ 
+ 	/* sync the cursor position */
+diff -rupN original/src/option.c new/src/option.c
+--- original/src/option.c	2012-11-03 16:02:19.162524771 -0400
++++ new/src/option.c	2012-11-02 17:14:42.932515736 -0400
+@@ -209,6 +209,7 @@
+ #endif
+ #define PV_NU		OPT_WIN(WV_NU)
+ #define PV_RNU		OPT_WIN(WV_RNU)
++#define PV_FNU		OPT_WIN(WV_FNU)
+ #ifdef FEAT_LINEBREAK
+ # define PV_NUW		OPT_WIN(WV_NUW)
+ #endif
+@@ -1126,6 +1127,9 @@ static struct vimoption
+ 			    {(char_u *)"", (char_u *)0L}
+ #endif
+ 			    SCRIPTID_INIT},
++    {"fixednumber", "fnu",  P_BOOL|P_VI_DEF|P_RWIN,
++			    (char_u *)VAR_WIN, PV_FNU,
++			    {(char_u *)FALSE, (char_u *)0L} SCRIPTID_INIT},
+     {"fkmap",	    "fk",   P_BOOL|P_VI_DEF,
+ #ifdef FEAT_FKMAP
+ 			    (char_u *)&p_fkmap, PV_NONE,
+@@ -7603,14 +7607,24 @@ set_bool_option(opt_idx, varp, value, op
+     /* 'list', 'number' */
+     else if ((int *)varp == &curwin->w_p_list
+ 	  || (int *)varp == &curwin->w_p_nu
+-	  || (int *)varp == &curwin->w_p_rnu)
++	  || (int *)varp == &curwin->w_p_rnu
++          || (int *)varp == &curwin->w_p_fnu)
+     {
+-	/* If 'number' is set, reset 'relativenumber'. */
+-	/* If 'relativenumber' is set, reset 'number'. */
+-	if ((int *)varp == &curwin->w_p_nu && curwin->w_p_nu)
++	/* If 'number' is set, reset 'relativenumber' and 'fixednumber'. */
++	/* If 'fixednumber' is set, reset 'number' and 'relativenumber'. */
++	/* If 'relativenumber' is set, reset 'number' and 'fixednumber'. */
++	if ((int *)varp == &curwin->w_p_nu && curwin->w_p_nu){
++	    curwin->w_p_rnu = FALSE;
++	    curwin->w_p_fnu = FALSE;
++        }
++	if ((int *)varp == &curwin->w_p_fnu && curwin->w_p_fnu){
++            curwin->w_p_nu = FALSE;
+ 	    curwin->w_p_rnu = FALSE;
+-	if ((int *)varp == &curwin->w_p_rnu && curwin->w_p_rnu)
++        }
++	if ((int *)varp == &curwin->w_p_rnu && curwin->w_p_rnu){
+ 	    curwin->w_p_nu = FALSE;
++            curwin->w_p_fnu = FALSE;
++        }
+     }
+ 
+     else if ((int *)varp == &curbuf->b_p_ro)
+@@ -9641,6 +9655,7 @@ get_varp(p)
+ #endif
+ 	case PV_NU:	return (char_u *)&(curwin->w_p_nu);
+ 	case PV_RNU:	return (char_u *)&(curwin->w_p_rnu);
++	case PV_FNU:	return (char_u *)&(curwin->w_p_fnu);
+ #ifdef FEAT_LINEBREAK
+ 	case PV_NUW:	return (char_u *)&(curwin->w_p_nuw);
+ #endif
+diff -rupN original/src/option.h new/src/option.h
+--- original/src/option.h	2012-11-03 16:02:19.172521930 -0400
++++ new/src/option.h	2012-11-02 17:07:27.282514875 -0400
+@@ -1071,6 +1071,7 @@ enum
+ #endif
+     , WV_NU
+     , WV_RNU
++    , WV_FNU
+ #ifdef FEAT_LINEBREAK
+     , WV_NUW
+ #endif
+diff -rupN original/src/screen.c new/src/screen.c
+--- original/src/screen.c	2012-11-03 16:02:19.552526487 -0400
++++ new/src/screen.c	2012-11-02 17:18:01.572515130 -0400
+@@ -430,10 +430,10 @@ update_screen(type)
+ 	check_for_delay(FALSE);
+ 
+ #ifdef FEAT_LINEBREAK
+-    /* Force redraw when width of 'number' or 'relativenumber' column
+-     * changes. */
++    /* Force redraw when width of 'number' or 'relativenumber' or 'fixednumber'
++     * column changes. */
+     if (curwin->w_redr_type < NOT_VALID
+-	   && curwin->w_nrwidth != ((curwin->w_p_nu || curwin->w_p_rnu)
++	   && curwin->w_nrwidth != ((curwin->w_p_nu || curwin->w_p_rnu || curwin->w_p_fnu)
+ 				    ? number_width(curwin) : 0))
+ 	curwin->w_redr_type = NOT_VALID;
+ #endif
+@@ -956,9 +956,9 @@ win_update(wp)
+ #endif
+ 
+ #ifdef FEAT_LINEBREAK
+-    /* Force redraw when width of 'number' or 'relativenumber' column
+-     * changes. */
+-    i = (wp->w_p_nu || wp->w_p_rnu) ? number_width(wp) : 0;
++    /* Force redraw when width of 'number' or 'relativenumber' or 'fixednumber'
++     * column changes. */
++    i = (wp->w_p_nu || wp->w_p_rnu || wp->w_p_fnu) ? number_width(wp) : 0;
+     if (wp->w_nrwidth != i)
+     {
+ 	type = NOT_VALID;
+@@ -3467,9 +3467,10 @@ win_line(wp, lnum, startrow, endrow, noc
+ 	    if (draw_state == WL_NR - 1 && n_extra == 0)
+ 	    {
+ 		draw_state = WL_NR;
+-		/* Display the absolute or relative line number. After the
+-		 * first fill with blanks when the 'n' flag isn't in 'cpo' */
+-		if ((wp->w_p_nu || wp->w_p_rnu)
++		/* Display the absolute or relative or fized line number. 
++                 * After the first fill with blanks when the 'n' flag 
++                 * isn't in 'cpo' */
++		if ((wp->w_p_nu || wp->w_p_rnu || wp->w_p_fnu)
+ 			&& (row == startrow
+ #ifdef FEAT_DIFF
+ 			    + filler_lines
+diff -rupN original/src/structs.h new/src/structs.h
+--- original/src/structs.h	2012-11-03 16:02:19.582522539 -0400
++++ new/src/structs.h	2012-11-02 17:10:56.062515475 -0400
+@@ -171,6 +171,8 @@ typedef struct
+ #define w_p_nu w_onebuf_opt.wo_nu	/* 'number' */
+     int		wo_rnu;
+ #define w_p_rnu w_onebuf_opt.wo_rnu	/* 'relativenumber' */
++    int		wo_fnu;
++#define w_p_fnu w_onebuf_opt.wo_fnu	/* 'fixednumber' */
+ #ifdef FEAT_LINEBREAK
+     long	wo_nuw;
+ # define w_p_nuw w_onebuf_opt.wo_nuw	/* 'numberwidth' */
